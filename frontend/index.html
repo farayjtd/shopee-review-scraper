@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Shopee Review Scraper</title>
+  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+</head>
+<body>
+  <div class="bg-blobs">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+  </div>
+
+  <div class="container">
+    <header>
+      <div class="logo">🛍️</div>
+      <h1>Shopee <span>Review</span> Scraper</h1>
+      <p>Analisis review & rating produk Shopee secara instan</p>
+    </header>
+
+    <div class="card input-card">
+      <label for="urlInput">Masukkan Link Produk Shopee</label>
+      <div class="input-row">
+        <input type="url" id="urlInput" placeholder="https://shopee.co.id/..." />
+        <button id="scrapeBtn" onclick="startScrape()">
+          <span id="btnText">Analisis</span>
+          <span id="btnLoader" class="hidden">⏳</span>
+        </button>
+      </div>
+      <p class="hint">Mendukung link produk panjang maupun link pendek shope.ee</p>
+    </div>
+
+    <div id="errorBox" class="card error-card hidden"></div>
+
+    <div id="results" class="hidden">
+
+      <!-- Produk Info -->
+      <div class="card product-card" id="productCard"></div>
+
+      <!-- Stats -->
+      <div class="card stats-card" id="statsCard"></div>
+
+      <!-- Keywords -->
+      <div class="card keywords-card" id="keywordsCard"></div>
+
+      <!-- Review List -->
+      <div class="card reviews-card">
+        <div class="card-header">
+          <h2>💬 Daftar Review</h2>
+          <div class="filter-row">
+            <button class="filter-btn active" onclick="filterReviews(0)">Semua</button>
+            <button class="filter-btn" onclick="filterReviews(5)">⭐ 5</button>
+            <button class="filter-btn" onclick="filterReviews(4)">⭐ 4</button>
+            <button class="filter-btn" onclick="filterReviews(3)">⭐ 3</button>
+            <button class="filter-btn" onclick="filterReviews(2)">⭐ 2</button>
+            <button class="filter-btn" onclick="filterReviews(1)">⭐ 1</button>
+          </div>
+        </div>
+        <div id="reviewsList"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
