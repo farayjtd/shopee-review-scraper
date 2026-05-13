@@ -1,5 +1,5 @@
 // Ganti dengan URL backend Render.com kamu
-const API_BASE = 'https://YOUR-APP.onrender.com';
+const API_BASE = 'https://shopee-review-scraper-api.onrender.com';
 
 let allReviews = [];
 

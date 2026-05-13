@@ -5,12 +5,16 @@ const SHOPEE_API_BASE = 'https://shopee.co.id/api/v2';
 
 // Header agar tidak diblokir Shopee
 const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Referer': 'https://shopee.co.id/',
-    'Accept': 'application/json',
-    'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'id-ID,id;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
     'x-api-source': 'pc',
+    'x-shopee-language': 'id',
+    'x-requested-with': 'XMLHttpRequest',
     'af-ac-enc-dat': 'aa0a',
+    'Connection': 'keep-alive',
 };
 
 async function scrapeShopeeReviews(url) {
@@ -34,11 +38,31 @@ async function scrapeShopeeReviews(url) {
 }
 
 async function fetchProductDetail(shopId, itemId) {
-    const url = `https://shopee.co.id/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`;
-    const res = await axios.get(url, { headers: HEADERS, timeout: 15000 });
-    const item = res.data?.data;
+    // Coba endpoint v4 dulu, fallback ke v2
+    const endpoints = [
+        `https://shopee.co.id/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`,
+        `https://shopee.co.id/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`,
+    ];
 
-    if (!item) throw new Error('Produk tidak ditemukan');
+    let item = null;
+
+    for (const url of endpoints) {
+        try {
+            const res = await axios.get(url, {
+                headers: {
+                    ...HEADERS,
+                    'cookie': `SPC_F=dummy; REC_T_ID=dummy;`,
+                },
+                timeout: 15000
+            });
+            item = res.data?.data;
+            if (item) break;
+        } catch (e) {
+            console.warn('Endpoint gagal:', url, e.message);
+        }
+    }
+
+    if (!item) throw new Error('Produk tidak ditemukan. Shopee mungkin memblokir request — coba lagi beberapa detik.');
 
     return {
         name: item.name,
@@ -47,7 +71,7 @@ async function fetchProductDetail(shopId, itemId) {
         priceMax: item.price_max ? formatPrice(item.price_max / 100000) : null,
         rating: item.item_rating?.rating_star?.toFixed(1),
         totalRating: item.item_rating?.rating_count?.reduce((a, b) => a + b, 0),
-        ratingBreakdown: item.item_rating?.rating_count, // [1★, 2★, 3★, 4★, 5★]
+        ratingBreakdown: item.item_rating?.rating_count,
         totalSold: item.historical_sold,
         stock: item.stock,
         images: item.images?.slice(0, 3).map(img =>
@@ -64,7 +88,7 @@ async function fetchReviews(shopId, itemId) {
     const pages = 3; // 3 halaman × 20 = 60 review
 
     for (let offset = 0; offset < pages * limit; offset += limit) {
-        const url = `https://shopee.co.id/api/v2/item/get_ratings?itemid=${itemId}&shopid=${shopId}&limit=${limit}&offset=${offset}&type=0&filter=0`;
+        const url = `https://shopee.co.id/api/v4/product/get_ratings?itemid=${itemId}&shopid=${shopId}&limit=${limit}&offset=${offset}&type=0&filter=0`;
 
         try {
             const res = await axios.get(url, { headers: HEADERS, timeout: 15000 });
