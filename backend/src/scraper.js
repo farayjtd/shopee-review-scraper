@@ -1,115 +1,127 @@
-const axios = require('axios');
+const puppeteer = require('puppeteer');
 const { parseShopeeUrl, delay } = require('./utils');
-
-const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': 'https://shopee.co.id/',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'id-ID,id;q=0.9',
-    'x-api-source': 'pc',
-    'x-shopee-language': 'id',
-};
 
 async function scrapeShopeeReviews(url) {
     const { shopId, itemId } = await parseShopeeUrl(url);
-    const productData = await fetchProductDetail(shopId, itemId);
-    const reviews = await fetchReviews(shopId, itemId);
-    const stats = calculateStats(reviews);
-    return { product: productData, reviews, stats };
-}
 
-async function fetchProductDetail(shopId, itemId) {
-    const urls = [
-        `https://shopee.co.id/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`,
-        `https://shopee.co.id/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`,
-        `https://shopee.co.id/api/v4/pdp/get_pc?item_id=${itemId}&shop_id=${shopId}`,
-    ];
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+        ],
+    });
 
-    for (const endpoint of urls) {
-        try {
-            const res = await axios.get(endpoint, {
-                headers: HEADERS,
-                timeout: 20000,
-                httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-            });
+    try {
+        const page = await browser.newPage();
 
-            // v4 format
-            let item = res.data?.data || res.data?.item;
-            if (!item && res.data?.data?.item) item = res.data.data.item;
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'id-ID,id;q=0.9',
+            'x-api-source': 'pc',
+        });
 
-            if (!item || !item.name) continue;
+        // Intercept API calls dari Shopee
+        const productData = await fetchProductViaBrowser(page, shopId, itemId);
+        const reviews = await fetchReviewsViaBrowser(page, shopId, itemId);
+        const stats = calculateStats(reviews);
 
-            return {
-                name: item.name,
-                description: (item.description || '').slice(0, 600) + ((item.description?.length > 600) ? '...' : ''),
-                price: formatPrice((item.price || item.price_min || 0) / 100000),
-                priceMax: item.price_max ? formatPrice(item.price_max / 100000) : null,
-                rating: item.item_rating?.rating_star?.toFixed(1) || '0',
-                totalRating: item.item_rating?.rating_count?.reduce((a, b) => a + b, 0) || 0,
-                ratingBreakdown: item.item_rating?.rating_count || [0, 0, 0, 0, 0],
-                totalSold: item.historical_sold || item.sold || 0,
-                stock: item.stock || 0,
-                images: (item.images || []).slice(0, 3).map(img =>
-                    img.startsWith('http') ? img : `https://down-id.img.susercontent.com/file/${img}`
-                ),
-                shopName: item.shop_name || '-',
-                category: item.categories?.map(c => c.display_name).join(' > ') || '',
-            };
-        } catch (e) {
-            console.warn('Gagal endpoint:', endpoint, e.message);
-        }
+        return { product: productData, reviews, stats };
+    } finally {
+        await browser.close();
     }
-
-    throw new Error('Produk tidak ditemukan. Pastikan link benar dan produk masih tersedia.');
 }
 
-async function fetchReviews(shopId, itemId) {
-    const allReviews = [];
-    const limit = 20;
+async function fetchProductViaBrowser(page, shopId, itemId) {
+    return new Promise(async (resolve, reject) => {
+        let resolved = false;
 
-    const endpoints = [
-        (offset) => `https://shopee.co.id/api/v4/product/get_ratings?itemid=${itemId}&shopid=${shopId}&limit=${limit}&offset=${offset}&type=0&filter=0`,
-        (offset) => `https://shopee.co.id/api/v2/item/get_ratings?itemid=${itemId}&shopid=${shopId}&limit=${limit}&offset=${offset}&type=0&filter=0`,
-    ];
-
-    for (const makeUrl of endpoints) {
-        for (let offset = 0; offset < 60; offset += limit) {
-            try {
-                const res = await axios.get(makeUrl(offset), {
-                    headers: HEADERS,
-                    timeout: 15000,
-                });
-
-                const ratings = res.data?.data?.ratings || res.data?.ratings;
-                if (!ratings || ratings.length === 0) break;
-
-                ratings.forEach(r => {
-                    allReviews.push({
-                        rating: r.rating_star || r.star || 5,
-                        comment: r.comment || '(Tanpa komentar)',
-                        author: r.author_username ? maskUsername(r.author_username) : 'Anonim',
-                        date: r.ctime ? new Date(r.ctime * 1000).toLocaleDateString('id-ID', {
-                            day: 'numeric', month: 'long', year: 'numeric'
-                        }) : '-',
-                        images: (r.images || []).map(img =>
-                            img.startsWith('http') ? img : `https://down-id.img.susercontent.com/file/${img}`
-                        ),
-                        productVariant: r.product_items?.[0]?.name || null,
-                        liked: r.like_count || 0,
-                    });
-                });
-
-                await delay(600);
-            } catch (e) {
-                console.warn('Gagal fetch review offset', offset, e.message);
-                break;
+        page.on('response', async (response) => {
+            const url = response.url();
+            if (resolved) return;
+            if (url.includes('/api/v4/item/get') || url.includes('/api/v2/item/get')) {
+                try {
+                    const json = await response.json();
+                    const item = json?.data || json?.item;
+                    if (item?.name) {
+                        resolved = true;
+                        resolve({
+                            name: item.name,
+                            description: (item.description || '').slice(0, 600) + (item.description?.length > 600 ? '...' : ''),
+                            price: formatPrice((item.price || item.price_min || 0) / 100000),
+                            priceMax: item.price_max ? formatPrice(item.price_max / 100000) : null,
+                            rating: item.item_rating?.rating_star?.toFixed(1) || '0',
+                            totalRating: item.item_rating?.rating_count?.reduce((a, b) => a + b, 0) || 0,
+                            ratingBreakdown: item.item_rating?.rating_count || [0, 0, 0, 0, 0],
+                            totalSold: item.historical_sold || 0,
+                            stock: item.stock || 0,
+                            images: (item.images || []).slice(0, 3).map(img =>
+                                img.startsWith('http') ? img : `https://down-id.img.susercontent.com/file/${img}`
+                            ),
+                            shopName: item.shop_name || '-',
+                            category: item.categories?.map(c => c.display_name).join(' > ') || '',
+                        });
+                    }
+                } catch (_) { }
             }
-        }
+        });
 
-        if (allReviews.length > 0) break; // Kalau sudah dapat review, stop
-    }
+        // Buka halaman produk — Shopee akan otomatis panggil API-nya sendiri
+        const productUrl = `https://shopee.co.id/product/${shopId}/${itemId}`;
+        await page.goto(productUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await delay(3000);
 
-    return allReviews;
+        if (!resolved) reject(new Error('Gagal mengambil data produk dari halaman Shopee.'));
+    });
+}
+
+async function fetchReviewsViaBrowser(page, shopId, itemId) {
+    const allReviews = [];
+
+    return new Promise(async (resolve) => {
+        const collected = new Set();
+
+        page.on('response', async (response) => {
+            const url = response.url();
+            if (url.includes('get_ratings') || url.includes('get_reviews')) {
+                try {
+                    const json = await response.json();
+                    const ratings = json?.data?.ratings || json?.ratings || [];
+                    ratings.forEach(r => {
+                        const key = r.cmtid || r.id || r.comment;
+                        if (key && collected.has(key)) return;
+                        if (key) collected.add(key);
+                        allReviews.push({
+                            rating: r.rating_star || 5,
+                            comment: r.comment || '(Tanpa komentar)',
+                            author: r.author_username ? maskUsername(r.author_username) : 'Anonim',
+                            date: r.ctime ? new Date(r.ctime * 1000).toLocaleDateString('id-ID', {
+                                day: 'numeric', month: 'long', year: 'numeric'
+                            }) : '-',
+                            images: (r.images || []).map(img =>
+                                img.startsWith('http') ? img : `https://down-id.img.susercontent.com/file/${img}`
+                            ),
+                            productVariant: r.product_items?.[0]?.name || null,
+                            liked: r.like_count || 0,
+                        });
+                    });
+                } catch (_) { }
+            }
+        });
+
+        // Scroll ke bagian review agar Shopee load review
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await delay(4000);
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight * 0.7));
+        await delay(2000);
+
+        resolve(allReviews);
+    });
 }
 
 function calculateStats(reviews) {
@@ -118,12 +130,11 @@ function calculateStats(reviews) {
     const avg = (reviews.reduce((a, r) => a + r.rating, 0) / total).toFixed(2);
     const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     reviews.forEach(r => breakdown[r.rating]++);
-    const keywords = extractKeywords(reviews);
     return {
         total, avg, breakdown,
         withPhoto: reviews.filter(r => r.images.length > 0).length,
         withComment: reviews.filter(r => r.comment !== '(Tanpa komentar)').length,
-        keywords,
+        keywords: extractKeywords(reviews),
         positive: reviews.filter(r => r.rating >= 4).length,
         negative: reviews.filter(r => r.rating <= 2).length,
         neutral: reviews.filter(r => r.rating === 3).length,
@@ -131,7 +142,7 @@ function calculateStats(reviews) {
 }
 
 function extractKeywords(reviews) {
-    const stopWords = ['yang', 'dan', 'di', 'ke', 'dari', 'ini', 'itu', 'juga', 'ada', 'dengan', 'untuk', 'tidak', 'sudah', 'nya', 'saya', 'aja', 'bisa', 'lebih', 'tapi', 'kalau', 'beli', 'barang', 'produk', 'seller', 'penjual', 'banget', 'sangat', 'sekali', 'sama', 'atau', 'tapi', 'sudah', 'belum', 'pake', 'pakai'];
+    const stopWords = ['yang', 'dan', 'di', 'ke', 'dari', 'ini', 'itu', 'juga', 'ada', 'dengan', 'untuk', 'tidak', 'sudah', 'nya', 'saya', 'aja', 'bisa', 'lebih', 'tapi', 'kalau', 'beli', 'barang', 'produk', 'seller', 'penjual', 'banget', 'sangat', 'sekali', 'sama', 'atau', 'pake', 'pakai'];
     const wordCount = {};
     reviews.forEach(r => {
         if (!r.comment || r.comment === '(Tanpa komentar)') return;
